@@ -7,18 +7,18 @@ import math
 
 FORWARD_BZ = 5000
 
-
 def forward_batch(model, input, batchsize):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     inputsize = input.shape[0]
     for count in range((inputsize - 1) // batchsize + 1):
         end = min(inputsize, (count + 1) * batchsize)
         if count == 0:
             tempinput = input[count * batchsize:end]
-            out = model(tempinput.cuda())
+            out = model(tempinput.to(device))
             out = out.data.cpu().numpy()
         else:
             tempinput = input[count * batchsize:end]
-            temp = model(tempinput.cuda()).data
+            temp = model(tempinput.to(device)).data
             out = np.concatenate([out, temp.cpu().numpy()], axis=0)
     return out
 
@@ -35,6 +35,7 @@ def sample_eps_Inf(image, epsilon, N):
 
 
 def get_explanation_pdt(image, model, label, exp, sg_r=None, sg_N=None, given_expl=None, binary_I=False):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     image_v = Variable(image, requires_grad=True)
     model.zero_grad()
     out = model(image_v)
@@ -78,7 +79,7 @@ def get_explanation_pdt(image, model, label, exp, sg_r=None, sg_N=None, given_ex
     elif exp == 'Smooth_Grad':
         avg_points = 50
         for count in range(int(sg_N/avg_points)):
-            sample = torch.FloatTensor(sample_eps_Inf(image.cpu().numpy(), sg_r, avg_points)).cuda()
+            sample = torch.FloatTensor(sample_eps_Inf(image.cpu().numpy(), sg_r, avg_points)).to(device)
             X_noisy = image.repeat(avg_points, 1, 1, 1) + sample
             expl_eps, _ = get_explanation_pdt(X_noisy, model, label, given_expl, binary_I=binary_I)
             if count == 0:
@@ -192,13 +193,14 @@ def shap(X, label, pdt, model, n_sample):
 
 
 def optimal_nb(X, label, pdt, model, n_sample):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     X = X.numpy()
     Xs = np.repeat(X.reshape(1, -1), n_sample, axis=0)
     Xs_img = Xs.reshape(n_sample, 1, 28, 28)
 
     Zs = np.apply_along_axis(sample_nb_Z, 1, Xs, 784, 784)
     Zs_img = Zs.reshape(n_sample, 1, 28, 28)
-    Zs_img = Variable(torch.tensor(Xs_img - Zs_img), requires_grad=False).float().cuda()
+    Zs_img = Variable(torch.tensor(Xs_img - Zs_img), requires_grad=False).float().to(device)
     out = forward_batch(model, Zs_img, FORWARD_BZ)
     ys = out[:, label]
     ys = pdt.data.cpu().numpy() - ys
@@ -209,6 +211,7 @@ def optimal_nb(X, label, pdt, model, n_sample):
 
 
 def optimal_square(X, label, pdt, model, n_sample):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     im_size = X.shape
     width = im_size[2]
     height = im_size[3]
@@ -224,7 +227,7 @@ def optimal_square(X, label, pdt, model, n_sample):
     Zs_img = Zs_img.reshape(n_sample, 1, 28, 28)
     ks = np.ones(n_sample)
 
-    Zs_img = Variable(torch.tensor(Zs_img), requires_grad=False).float().cuda()
+    Zs_img = Variable(torch.tensor(Zs_img), requires_grad=False).float().to(device)
     out = forward_batch(model, Zs_img, FORWARD_BZ)
     ys = out[:, label]
     ys = pdt.data.cpu().numpy() - ys
@@ -253,7 +256,9 @@ def get_imageset(image_copy, im_size, rads=[2, 3, 4, 5, 6]):
 
 
 def get_exp_infid(image, model, exp, label, pdt, binary_I, pert):
-    point = 784
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
+    point = image.reshape(image.shape[0], -1).shape[0]
+    orig_shape = list(image.shape)[1:]
     total = (np.prod(exp.shape))
     num = 10000
     if pert == 'Square':
@@ -286,8 +291,8 @@ def get_exp_infid(image, model, exp, label, pdt, binary_I, pert):
     else:
         raise ValueError("Perturbation type and binary_I do not match.")
 
-    image_copy = np.reshape(image_copy, (num, 1, 28, 28))
-    image_v = Variable(torch.from_numpy(image_copy.astype(np.float32)).cuda(), requires_grad=False)
+    image_copy = np.reshape(image_copy, [num] + orig_shape)
+    image_v = Variable(torch.from_numpy(image_copy.astype(np.float32)).to(device), requires_grad=False)
     out = forward_batch(model, image_v, FORWARD_BZ)
     pdt_rm = (out[:, label])
     pdt_diff = pdt - pdt_rm
@@ -299,9 +304,10 @@ def get_exp_infid(image, model, exp, label, pdt, binary_I, pert):
     return infid
 
 def get_exp_sens(X, model, expl,exp, yy, pdt, sg_r,sg_N,sen_r,sen_N,norm,binary_I,given_expl):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     max_diff = -math.inf
     for _ in range(sen_N):
-        sample = torch.FloatTensor(sample_eps_Inf(X.cpu().numpy(), sen_r, 1)).cuda()
+        sample = torch.FloatTensor(sample_eps_Inf(X.cpu().numpy(), sen_r, 1)).to(device)
         X_noisy = X + sample
         expl_eps, _ = get_explanation_pdt(X_noisy, model, yy, exp, sg_r, sg_N,
                                      given_expl=given_expl, binary_I=binary_I)
@@ -309,6 +315,7 @@ def get_exp_sens(X, model, expl,exp, yy, pdt, sg_r,sg_N,sen_r,sen_N,norm,binary_
     return max_diff
 
 def evaluate_infid_sen(loader, model, exp, pert, sen_r, sen_N, sg_r=None, sg_N=None, given_expl=None):
+    device = torch.device('cuda:0') if torch.cuda.is_available() else torch.device('cpu')
     if pert == 'Square':
         binary_I = True
     elif pert == 'Gaussian':
@@ -324,7 +331,7 @@ def evaluate_infid_sen(loader, model, exp, pert, sen_r, sen_N, sg_r=None, sg_N=N
         if i >= 5:  # i >= 50 for the experiments used in the paper
             break
 
-        X, y = X.cuda(), y.cuda().long()
+        X, y = X.to(device), y.to(device).long()
         if y.dim() == 2:
             y = y.squeeze(1)
 
